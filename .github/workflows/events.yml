@@ -1,8 +1,7 @@
-name: Official ONE PIECE Discord Announcer
+name: Official ONE PIECE Discord Scheduled Events
 
 on:
   schedule:
-    # Runs every 6 hours. GitHub cron uses UTC.
     - cron: "0 */6 * * *"
   workflow_dispatch:
 
@@ -25,14 +24,13 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Check official ONE PIECE events and post new ones
+      - name: Create official ONE PIECE Discord scheduled events
         run: node index.js
         env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          POST_EXISTING: "true"
-          MAX_POSTS_PER_RUN: "20"
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
           ALLOWED_REGIONS: "North America"
-          STATE_FILE: "data/test-na-chrono-v1.json"
+          MAX_EVENTS_PER_RUN: "20"
 
       - name: Commit updated seen-event list
         run: |
@@ -42,6 +40,6 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add data
-            git commit -m "Update seen official ONE PIECE events"
+            git commit -m "Update created Discord scheduled events"
             git push
           fi
