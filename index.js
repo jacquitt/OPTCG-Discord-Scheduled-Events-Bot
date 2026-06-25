@@ -474,27 +474,54 @@ function buildDiscordEventPayload(event) {
   };
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function createDiscordScheduledEvent(event) {
   const payload = buildDiscordEventPayload(event);
 
-  const response = await fetch(
-    `https://discord.com/api/v10/guilds/${DISCORD_GUILD_ID}/scheduled-events`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bot ${DISCORD_BOT_TOKEN}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    }
-  );
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    const response = await fetch(
+      `https://discord.com/api/v10/guilds/${DISCORD_GUILD_ID}/scheduled-events`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bot ${DISCORD_BOT_TOKEN}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      }
+    );
 
-  if (!response.ok) {
+    if (response.ok) {
+      await sleep(4000);
+      return response.json();
+    }
+
     const body = await response.text().catch(() => "");
-    throw new Error(`Could not create Discord scheduled event: ${response.status} ${response.statusText} ${body}`);
+
+    if (response.status === 429) {
+      let retryAfterMs = 10000;
+
+      try {
+        const data = JSON.parse(body);
+        if (data.retry_after) {
+          retryAfterMs = Math.ceil(Number(data.retry_after) * 1000) + 1000;
+        }
+      } catch {}
+
+      console.log(`Discord rate limited. Waiting ${retryAfterMs}ms, then retrying...`);
+      await sleep(retryAfterMs);
+      continue;
+    }
+
+    throw new Error(
+      `Could not create Discord scheduled event: ${response.status} ${response.statusText} ${body}`
+    );
   }
 
-  return response.json();
+  throw new Error("Could not create Discord scheduled event after too many retry attempts.");
 }
 
 async function main() {
