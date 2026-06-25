@@ -1,5 +1,5 @@
 {
-  "name": "cardkaizoku-discord-announcer",
+  "name": "optcg-discord-scheduled-events-bot",
   "version": "1.0.0",
   "type": "module",
   "private": true,
@@ -7,6 +7,6 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "playwright": "^1.49.0"
+    "luxon": "^3.5.0"
   }
 }
