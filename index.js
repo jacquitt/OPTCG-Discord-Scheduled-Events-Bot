@@ -1,3 +1,4 @@
+```js
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -7,7 +8,7 @@ const EVENTS_URL = process.env.EVENTS_URL || "https://en.onepiece-cardgame.com/e
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 const DISCORD_GUILD_ID = process.env.DISCORD_GUILD_ID;
 const STATE_FILE = process.env.STATE_FILE || "data/created-discord-events.json";
-const MAX_EVENTS_PER_RUN = Number(process.env.MAX_EVENTS_PER_RUN || 20);
+const MAX_EVENTS_PER_RUN = Number(process.env.MAX_EVENTS_PER_RUN || 10);
 
 const ALLOWED_REGIONS = new Set(
   String(process.env.ALLOWED_REGIONS || "North America")
@@ -37,6 +38,10 @@ function clean(text) {
     .replace(/\u200b/g, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function decodeHtml(text) {
@@ -84,7 +89,9 @@ function stripHtmlToLines(html, baseUrl = EVENTS_URL) {
 
 async function fetchText(url) {
   const response = await fetch(url, {
-    headers: { "user-agent": "Mozilla/5.0 OPCG Discord scheduled event checker" },
+    headers: {
+      "user-agent": "Mozilla/5.0 OPCG Discord scheduled event checker",
+    },
   });
 
   if (!response.ok) {
@@ -96,6 +103,7 @@ async function fetchText(url) {
 
 function standardRegion(region) {
   const cleaned = clean(region);
+
   if (/^north america$/i.test(cleaned)) return "North America";
   if (/^europe$/i.test(cleaned)) return "Europe";
   if (/^oceania$/i.test(cleaned)) return "Oceania";
@@ -103,6 +111,7 @@ function standardRegion(region) {
   if (/^middle east$/i.test(cleaned)) return "Middle East";
   if (/^asia$/i.test(cleaned)) return "Asia";
   if (/^online$/i.test(cleaned)) return "Online";
+
   return cleaned;
 }
 
@@ -113,7 +122,14 @@ function isAllowedRegion(region) {
 function eventId(event) {
   return crypto
     .createHash("sha256")
-    .update(`${event.title}|${event.date}|${event.region}|${event.venue}`)
+    .update(`tournament|${event.title}|${event.date}|${event.region}|${event.venue}`)
+    .digest("hex");
+}
+
+function signupEventId(event) {
+  return crypto
+    .createHash("sha256")
+    .update(`signup|${event.title}|${event.date}|${event.signupGuide}|${event.registration}`)
     .digest("hex");
 }
 
@@ -135,7 +151,8 @@ function parseMainEventLinks(html) {
   const links = [];
   const seen = new Set();
 
-  const anchorRegex = /<a\b[^>]*href=["']([^"']*\/events\/[^"']+\.html|[^"']+\.html)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  const anchorRegex =
+    /<a\b[^>]*href=["']([^"']*\/events\/[^"']+\.html|[^"']+\.html)["'][^>]*>([\s\S]*?)<\/a>/gi;
 
   let match;
   while ((match = anchorRegex.exec(html)) !== null) {
@@ -143,6 +160,7 @@ function parseMainEventLinks(html) {
     const inner = match[2];
 
     const url = absoluteUrl(href);
+
     if (!url.includes("/events/")) continue;
     if (url.endsWith("/events/")) continue;
     if (seen.has(url)) continue;
@@ -159,12 +177,14 @@ function parseMainEventLinks(html) {
 
 function parseTitleFromDetail(html, fallbackText, detailUrl) {
   const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+
   if (titleMatch) {
     const title = clean(
       decodeHtml(titleMatch[1])
         .replace("| ONE PIECE CARD GAME - Official Web Site", "")
         .replace("｜ONE PIECE CARD GAME - Official Web Site", "")
     );
+
     if (title) return title;
   }
 
@@ -178,10 +198,12 @@ function parseApplicationInfo(lines) {
   const startIndex = lines.findIndex((line) => /^Application Period$/i.test(line));
   if (startIndex === -1) return { monthSignupDates, regionSignupTimes };
 
-  const stopRegex = /^(Prize|Side Event|Tournament Rules|Notes|Important Notes|Products|VIEW ALL EVENTS)$/i;
+  const stopRegex =
+    /^(Prize|Side Event|Tournament Rules|Notes|Important Notes|Products|VIEW ALL EVENTS)$/i;
 
   for (let i = startIndex + 1; i < lines.length; i++) {
     const line = lines[i];
+
     if (stopRegex.test(line)) break;
 
     const monthMatch = line.match(/^For\s+(.+?)\s+Events?:\s*(.+)$/i);
@@ -190,7 +212,10 @@ function parseApplicationInfo(lines) {
       continue;
     }
 
-    const regionMatch = line.match(/^(North America|Europe|Oceania|Latin America|Middle East|Asia|Online):\s*(.+)$/i);
+    const regionMatch = line.match(
+      /^(North America|Europe|Oceania|Latin America|Middle East|Asia|Online):\s*(.+)$/i
+    );
+
     if (regionMatch) {
       regionSignupTimes[standardRegion(regionMatch[1])] = clean(regionMatch[2]);
     }
@@ -203,6 +228,7 @@ function getFirstMonthFromDate(dateText) {
   const match = String(dateText || "").match(
     /\b(January|February|March|April|May|June|July|August|September|October|November|December)\b/i
   );
+
   if (!match) return "";
   return match[1].charAt(0).toUpperCase() + match[1].slice(1).toLowerCase();
 }
@@ -215,6 +241,7 @@ function getSignupGuide(event, applicationInfo) {
   if (signupDate && signupTime) return `${signupDate} at ${signupTime}`;
   if (signupDate) return signupDate;
   if (signupTime) return signupTime;
+
   return "";
 }
 
@@ -229,8 +256,11 @@ function parseDetailedSchedule(html, pageTitle, detailUrl) {
 
   if (startIndex === -1) return events;
 
-  const stopRegex = /^(Advanced Application Method|Application Period|Prize|Side Event|Tournament Rules|Notes|Important Notes|Products|VIEW ALL EVENTS)$/i;
-  const regionRegex = /^(North America|Europe|Oceania|Latin America|Middle East|Asia|Online)$/i;
+  const stopRegex =
+    /^(Advanced Application Method|Application Period|Prize|Side Event|Tournament Rules|Notes|Important Notes|Products|VIEW ALL EVENTS)$/i;
+
+  const regionRegex =
+    /^(North America|Europe|Oceania|Latin America|Middle East|Asia|Online)$/i;
 
   let currentRegion = "";
   let currentOrganizer = "";
@@ -303,10 +333,14 @@ function normalizeEventFields(event) {
   let registration = clean(event.registration);
 
   const venueFromDate = date.match(/\s+Venue:\s*(.*?)(?:\s+Link:\s*|$)/i);
-  if (!venue && venueFromDate) venue = clean(venueFromDate[1]);
+  if (!venue && venueFromDate) {
+    venue = clean(venueFromDate[1]);
+  }
 
   const linkFromDate = date.match(/\s+Link:\s*(.*)$/i);
-  if (!registration && linkFromDate) registration = clean(linkFromDate[1]);
+  if (!registration && linkFromDate) {
+    registration = clean(linkFromDate[1]);
+  }
 
   date = clean(date.replace(/\s+Venue:.*$/i, "").replace(/\s+Link:.*$/i, ""));
 
@@ -316,13 +350,42 @@ function normalizeEventFields(event) {
     venue = clean(venue.replace(/\s+Link:.*$/i, ""));
   }
 
-  return { ...event, date, venue, registration };
+  return {
+    ...event,
+    date,
+    venue,
+    registration,
+  };
+}
+
+function guessTimeZoneFromVenue(venue) {
+  const v = String(venue || "").toUpperCase();
+
+  if (/\b(CA|WA|OR|NV|BC)\b/.test(v)) return "America/Los_Angeles";
+  if (/\bAB\b/.test(v)) return "America/Edmonton";
+  if (/\bAZ\b/.test(v)) return "America/Phoenix";
+  if (/\bCO|UT|NM|WY|MT\b/.test(v)) return "America/Denver";
+
+  if (/\bTX|OK|IL|IN|WI|MN|MO|LA|AR|IA|KS|NE|TN|MS|AL\b/.test(v)) {
+    return "America/Chicago";
+  }
+
+  if (/\bFL|VA|ON|QC|NY|NC|SC|GA|PA|OH|MI|MA|MD|NJ\b/.test(v)) {
+    return "America/New_York";
+  }
+
+  return "America/Los_Angeles";
 }
 
 function parseDateRange(dateText, venue) {
   const text = clean(dateText);
   const yearMatch = text.match(/\b(20\d{2})\b/);
-  const monthMatches = [...text.matchAll(/\b(January|February|March|April|May|June|July|August|September|October|November|December)\b/gi)];
+
+  const monthMatches = [
+    ...text.matchAll(
+      /\b(January|February|March|April|May|June|July|August|September|October|November|December)\b/gi
+    ),
+  ];
 
   if (!yearMatch || monthMatches.length === 0) return null;
 
@@ -342,12 +405,21 @@ function parseDateRange(dateText, venue) {
 
   if (monthMatches.length >= 2) {
     endMonth = MONTHS[monthMatches[1][1].toLowerCase()];
+
     const afterEndMonth = text.slice(monthMatches[1].index + monthMatches[1][0].length);
     const endDayMatch = afterEndMonth.match(/\s+(\d{1,2})/);
-    if (endDayMatch) endDay = Number(endDayMatch[1]);
+
+    if (endDayMatch) {
+      endDay = Number(endDayMatch[1]);
+    }
   } else {
-    const rangeMatch = text.match(/\b[A-Za-z]+\s+(\d{1,2})\s*[-–]\s*(\d{1,2})\s*,?\s*20\d{2}/);
-    if (rangeMatch) endDay = Number(rangeMatch[2]);
+    const rangeMatch = text.match(
+      /\b[A-Za-z]+\s+(\d{1,2})\s*[-–]\s*(\d{1,2})\s*,?\s*20\d{2}/
+    );
+
+    if (rangeMatch) {
+      endDay = Number(rangeMatch[2]);
+    }
   }
 
   const zone = guessTimeZoneFromVenue(venue);
@@ -361,20 +433,38 @@ function parseDateRange(dateText, venue) {
       { year, month: endMonth, day: endDay, hour: 20, minute: 0 },
       { zone }
     ),
+    zone,
   };
 }
 
-function guessTimeZoneFromVenue(venue) {
-  const v = String(venue || "").toUpperCase();
+function parseSignupDateTime(signupGuide) {
+  const text = clean(signupGuide);
 
-  if (/\b(CA|WA|OR|NV|BC)\b/.test(v)) return "America/Los_Angeles";
-  if (/\bAB\b/.test(v)) return "America/Edmonton";
-  if (/\bAZ\b/.test(v)) return "America/Phoenix";
-  if (/\bCO|UT|NM|WY|MT\b/.test(v)) return "America/Denver";
-  if (/\bTX|OK|IL|IN|WI|MN|MO|LA|AR|IA|KS|NE|TN|MS|AL\b/.test(v)) return "America/Chicago";
-  if (/\bFL|VA|ON|QC|NY|NC|SC|GA|PA|OH|MI|MA|MD|NJ\b/.test(v)) return "America/New_York";
+  const dateMatch = text.match(
+    /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+20\d{2}\b/i
+  );
 
-  return "America/Los_Angeles";
+  if (!dateMatch) return null;
+
+  const timeMatch = text.match(/\b(\d{1,2}):(\d{2})\s*(am|pm)\s*(PDT|PT|PST)\b/i);
+
+  if (!timeMatch) return null;
+
+  const datePart = dateMatch[0].replace(",", "");
+  let hour = Number(timeMatch[1]);
+  const minute = Number(timeMatch[2]);
+  const ampm = timeMatch[3].toLowerCase();
+
+  if (ampm === "pm" && hour !== 12) hour += 12;
+  if (ampm === "am" && hour === 12) hour = 0;
+
+  const parsed = DateTime.fromFormat(datePart, "LLLL d yyyy", {
+    zone: "America/Los_Angeles",
+  }).set({ hour, minute });
+
+  if (!parsed.isValid) return null;
+
+  return parsed;
 }
 
 function isFutureOrUpcomingEvent(event) {
@@ -385,11 +475,23 @@ function isFutureOrUpcomingEvent(event) {
   return range.end >= today;
 }
 
+function shouldCreateSignupEvent(event) {
+  if (!event.signupGuide) return false;
+
+  const signupDateTime = parseSignupDateTime(event.signupGuide);
+  if (!signupDateTime) return false;
+
+  return signupDateTime >= DateTime.now();
+}
+
 function compareEventsChronologically(a, b) {
   const rangeA = parseDateRange(a.date, a.venue);
   const rangeB = parseDateRange(b.date, b.venue);
 
-  if (rangeA && rangeB) return rangeA.start.toMillis() - rangeB.start.toMillis();
+  if (rangeA && rangeB) {
+    return rangeA.start.toMillis() - rangeB.start.toMillis();
+  }
+
   if (rangeA && !rangeB) return -1;
   if (!rangeA && rangeB) return 1;
 
@@ -409,6 +511,7 @@ async function scrapeEvents() {
       const detailHtml = await fetchText(link.url);
       const pageTitle = parseTitleFromDetail(detailHtml, link.text, link.url);
       const detailedEvents = parseDetailedSchedule(detailHtml, pageTitle, link.url);
+
       allEvents.push(...detailedEvents);
     } catch (error) {
       console.log(`Could not parse ${link.url}: ${error.message}`);
@@ -422,6 +525,7 @@ async function scrapeEvents() {
     .sort(compareEventsChronologically);
 
   const byId = new Map();
+
   for (const event of filteredEvents) {
     byId.set(eventId(event), event);
   }
@@ -441,15 +545,41 @@ async function getExistingDiscordEvents() {
 
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    throw new Error(`Could not fetch Discord events: ${response.status} ${response.statusText} ${body}`);
+
+    throw new Error(
+      `Could not fetch Discord events: ${response.status} ${response.statusText} ${body}`
+    );
   }
 
   return response.json();
 }
 
-function buildDiscordEventPayload(event) {
+function payloadKey(payload) {
+  const name = clean(payload.name).toLowerCase();
+  const date = DateTime.fromISO(payload.scheduled_start_time).toUTC().toISODate();
+  const location = clean(payload.entity_metadata?.location || "").toLowerCase();
+
+  return `${name}|${date}|${location}`;
+}
+
+function buildExistingDiscordEventKeys(existingDiscordEvents) {
+  return new Set(
+    existingDiscordEvents.map((event) => {
+      const name = clean(event.name).toLowerCase();
+      const date = DateTime.fromISO(event.scheduled_start_time).toUTC().toISODate();
+      const location = clean(event.entity_metadata?.location || "").toLowerCase();
+
+      return `${name}|${date}|${location}`;
+    })
+  );
+}
+
+function buildDiscordTournamentEventPayload(event) {
   const range = parseDateRange(event.date, event.venue);
-  if (!range) throw new Error(`Could not parse event date: ${event.date}`);
+
+  if (!range) {
+    throw new Error(`Could not parse event date: ${event.date}`);
+  }
 
   const description = [
     event.date ? `Date: ${event.date}` : "",
@@ -474,13 +604,41 @@ function buildDiscordEventPayload(event) {
   };
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function buildDiscordSignupEventPayload(event) {
+  const signupDateTime = parseSignupDateTime(event.signupGuide);
+
+  if (!signupDateTime) {
+    throw new Error(`Could not parse sign-up guide: ${event.signupGuide}`);
+  }
+
+  const start = signupDateTime;
+  const end = signupDateTime.plus({ hours: 1 });
+
+  const description = [
+    `Registration opens for: ${event.title}`,
+    event.date ? `Tournament date: ${event.date}` : "",
+    event.venue ? `Tournament venue: ${event.venue}` : "",
+    event.registration ? `Registration: ${event.registration}` : "",
+    event.source ? `Source: ${event.source}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  return {
+    name: `SIGN-UP OPENS: ${event.title}`.slice(0, 100),
+    privacy_level: 2,
+    scheduled_start_time: start.toUTC().toISO(),
+    scheduled_end_time: end.toUTC().toISO(),
+    description: description.slice(0, 1000),
+    entity_type: 3,
+    channel_id: null,
+    entity_metadata: {
+      location: "Online registration",
+    },
+  };
 }
 
-async function createDiscordScheduledEvent(event) {
-  const payload = buildDiscordEventPayload(event);
-
+async function createDiscordScheduledEventFromPayload(payload) {
   for (let attempt = 1; attempt <= 5; attempt++) {
     const response = await fetch(
       `https://discord.com/api/v10/guilds/${DISCORD_GUILD_ID}/scheduled-events`,
@@ -532,25 +690,70 @@ async function main() {
   const seenIds = await readSeenIds();
   const officialEvents = await scrapeEvents();
   const existingDiscordEvents = await getExistingDiscordEvents();
-
-  const existingNames = new Set(
-    existingDiscordEvents.map((event) => clean(event.name).toLowerCase())
-  );
+  const existingDiscordEventKeys = buildExistingDiscordEventKeys(existingDiscordEvents);
 
   console.log(`Found ${officialEvents.length} future North America official events.`);
   console.log(`Found ${existingDiscordEvents.length} existing Discord scheduled events.`);
 
-  const eventsToCreate = officialEvents
-    .filter((event) => !seenIds.has(eventId(event)))
-    .filter((event) => !existingNames.has(clean(event.title).slice(0, 100).toLowerCase()))
-    .slice(0, MAX_EVENTS_PER_RUN);
+  const jobs = [];
 
-  console.log(`Creating ${eventsToCreate.length} Discord scheduled events.`);
+  for (const event of officialEvents) {
+    const tournamentId = eventId(event);
+    const tournamentPayload = buildDiscordTournamentEventPayload(event);
+    const tournamentPayloadKey = payloadKey(tournamentPayload);
 
-  for (const event of eventsToCreate) {
-    await createDiscordScheduledEvent(event);
-    seenIds.add(eventId(event));
-    console.log(`Created Discord event: ${event.date} - ${event.title}`);
+    if (seenIds.has(tournamentId) || existingDiscordEventKeys.has(tournamentPayloadKey)) {
+      if (existingDiscordEventKeys.has(tournamentPayloadKey)) {
+        seenIds.add(tournamentId);
+      }
+    } else {
+      jobs.push({
+        type: "tournament",
+        id: tournamentId,
+        event,
+        payload: tournamentPayload,
+        startTime: tournamentPayload.scheduled_start_time,
+      });
+    }
+
+    if (shouldCreateSignupEvent(event)) {
+      const signupId = signupEventId(event);
+      const signupPayload = buildDiscordSignupEventPayload(event);
+      const signupPayloadKey = payloadKey(signupPayload);
+
+      if (seenIds.has(signupId) || existingDiscordEventKeys.has(signupPayloadKey)) {
+        if (existingDiscordEventKeys.has(signupPayloadKey)) {
+          seenIds.add(signupId);
+        }
+      } else {
+        jobs.push({
+          type: "signup",
+          id: signupId,
+          event,
+          payload: signupPayload,
+          startTime: signupPayload.scheduled_start_time,
+        });
+      }
+    }
+  }
+
+  jobs.sort((a, b) => {
+    return DateTime.fromISO(a.startTime).toMillis() - DateTime.fromISO(b.startTime).toMillis();
+  });
+
+  const jobsToCreate = jobs.slice(0, MAX_EVENTS_PER_RUN);
+
+  console.log(`Creating ${jobsToCreate.length} Discord scheduled events.`);
+
+  for (const job of jobsToCreate) {
+    await createDiscordScheduledEventFromPayload(job.payload);
+    seenIds.add(job.id);
+
+    if (job.type === "signup") {
+      console.log(`Created sign-up event: ${job.event.signupGuide} - ${job.event.title}`);
+    } else {
+      console.log(`Created tournament event: ${job.event.date} - ${job.event.title}`);
+    }
   }
 
   await writeSeenIds(seenIds);
@@ -560,3 +763,4 @@ main().catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });
+```
