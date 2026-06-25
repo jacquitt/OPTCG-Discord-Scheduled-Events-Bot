@@ -5,6 +5,10 @@ on:
     - cron: "0 */6 * * *"
   workflow_dispatch:
 
+concurrency:
+  group: discord-scheduled-events
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -41,5 +45,6 @@ jobs:
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add data
             git commit -m "Update created Discord scheduled events"
+            git pull --rebase
             git push
           fi
