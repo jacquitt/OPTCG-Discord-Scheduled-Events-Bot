@@ -95,7 +95,7 @@ async function fetchText(url) {
   });
 
   if (!response.ok) {
-    throw new Error(`Failed to fetch ${url}: ${response.status} ${response.statusText}`);
+    throw new Error("Failed to fetch " + url + ": " + response.status + " " + response.statusText);
   }
 
   return response.text();
