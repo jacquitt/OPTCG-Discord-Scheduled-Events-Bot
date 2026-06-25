@@ -1,16 +1,14 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DateTime } from "luxon";
 
 const EVENTS_URL = process.env.EVENTS_URL || "https://en.onepiece-cardgame.com/events/";
-const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
-const STATE_FILE = process.env.STATE_FILE || "data/seen-events.json";
+const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
+const DISCORD_GUILD_ID = process.env.DISCORD_GUILD_ID;
+const STATE_FILE = process.env.STATE_FILE || "data/created-discord-events.json";
+const MAX_EVENTS_PER_RUN = Number(process.env.MAX_EVENTS_PER_RUN || 20);
 
-const POST_EXISTING = String(process.env.POST_EXISTING || "false").toLowerCase() === "true";
-const MAX_POSTS_PER_RUN = Number(process.env.MAX_POSTS_PER_RUN || 10);
-
-// Default: only North America.
-// You can override this in GitHub Actions with ALLOWED_REGIONS.
 const ALLOWED_REGIONS = new Set(
   String(process.env.ALLOWED_REGIONS || "North America")
     .split(",")
@@ -18,9 +16,25 @@ const ALLOWED_REGIONS = new Set(
     .filter(Boolean)
 );
 
+const MONTHS = {
+  january: 1,
+  february: 2,
+  march: 3,
+  april: 4,
+  may: 5,
+  june: 6,
+  july: 7,
+  august: 8,
+  september: 9,
+  october: 10,
+  november: 11,
+  december: 12,
+};
+
 function clean(text) {
   return String(text || "")
     .replace(/\u00a0/g, " ")
+    .replace(/\u200b/g, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -70,9 +84,7 @@ function stripHtmlToLines(html, baseUrl = EVENTS_URL) {
 
 async function fetchText(url) {
   const response = await fetch(url, {
-    headers: {
-      "user-agent": "Mozilla/5.0 Discord event checker",
-    },
+    headers: { "user-agent": "Mozilla/5.0 OPCG Discord scheduled event checker" },
   });
 
   if (!response.ok) {
@@ -84,7 +96,6 @@ async function fetchText(url) {
 
 function standardRegion(region) {
   const cleaned = clean(region);
-
   if (/^north america$/i.test(cleaned)) return "North America";
   if (/^europe$/i.test(cleaned)) return "Europe";
   if (/^oceania$/i.test(cleaned)) return "Oceania";
@@ -92,85 +103,17 @@ function standardRegion(region) {
   if (/^middle east$/i.test(cleaned)) return "Middle East";
   if (/^asia$/i.test(cleaned)) return "Asia";
   if (/^online$/i.test(cleaned)) return "Online";
-
   return cleaned;
 }
 
 function isAllowedRegion(region) {
-  if (!ALLOWED_REGIONS.size) return true;
   return ALLOWED_REGIONS.has(clean(region).toLowerCase());
-}
-
-function getFirstMonthFromDate(dateText) {
-  const match = String(dateText || "").match(
-    /\b(January|February|March|April|May|June|July|August|September|October|November|December)\b/i
-  );
-
-  if (!match) return "";
-  return match[1].charAt(0).toUpperCase() + match[1].slice(1).toLowerCase();
-}
-
-function parseApplicationInfo(lines) {
-  const monthSignupDates = {};
-  const regionSignupTimes = {};
-
-  const startIndex = lines.findIndex((line) => /^Application Period$/i.test(line));
-
-  if (startIndex === -1) {
-    return { monthSignupDates, regionSignupTimes };
-  }
-
-  const stopRegex = /^(Prize|Side Event|Tournament Rules|Notes|Important Notes|Products|VIEW ALL EVENTS)$/i;
-
-  for (let i = startIndex + 1; i < lines.length; i++) {
-    const line = lines[i];
-
-    if (stopRegex.test(line)) break;
-
-    const monthMatch = line.match(/^For\s+(.+?)\s+Events?:\s*(.+)$/i);
-    if (monthMatch) {
-      const month = clean(monthMatch[1]);
-      const signupDate = clean(monthMatch[2]);
-      monthSignupDates[month] = signupDate;
-      continue;
-    }
-
-    const regionMatch = line.match(/^(North America|Europe|Oceania|Latin America|Middle East|Asia|Online):\s*(.+)$/i);
-    if (regionMatch) {
-      const region = standardRegion(regionMatch[1]);
-      const time = clean(regionMatch[2]);
-      regionSignupTimes[region] = time;
-      continue;
-    }
-  }
-
-  return { monthSignupDates, regionSignupTimes };
-}
-
-function getSignupGuide(event, applicationInfo) {
-  const month = getFirstMonthFromDate(event.date);
-  const signupDate = applicationInfo.monthSignupDates[month] || "";
-  const signupTime = applicationInfo.regionSignupTimes[event.region] || "";
-
-  if (signupDate && signupTime) {
-    return `${signupDate} at ${signupTime}`;
-  }
-
-  if (signupDate) return signupDate;
-  if (signupTime) return signupTime;
-
-  return "";
-}
-
-function getFirstUrl(text) {
-  const match = String(text || "").match(/https?:\/\/\S+/i);
-  return match ? match[0] : "";
 }
 
 function eventId(event) {
   return crypto
     .createHash("sha256")
-    .update(`${event.source}|${event.date}|${event.title}|${event.region || ""}|${event.venue || ""}|${event.signupGuide || ""}`)
+    .update(`${event.title}|${event.date}|${event.region}|${event.venue}`)
     .digest("hex");
 }
 
@@ -215,8 +158,6 @@ function parseMainEventLinks(html) {
 }
 
 function parseTitleFromDetail(html, fallbackText, detailUrl) {
-  const lines = stripHtmlToLines(html, detailUrl);
-
   const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   if (titleMatch) {
     const title = clean(
@@ -224,29 +165,57 @@ function parseTitleFromDetail(html, fallbackText, detailUrl) {
         .replace("| ONE PIECE CARD GAME - Official Web Site", "")
         .replace("｜ONE PIECE CARD GAME - Official Web Site", "")
     );
-
     if (title) return title;
   }
 
-  const fallback = clean(fallbackText.replace(/Event Period:.*$/i, ""));
-  return fallback || detailUrl;
+  return clean(fallbackText.replace(/Event Period:.*$/i, "")) || detailUrl;
 }
 
-function parseCardFallback(linkText, detailUrl) {
-  const periodMatch = linkText.match(/Event Period:\s*(.*?)(?:Regulation:|$)/i);
-  const title = clean(linkText.replace(/Event Period:.*$/i, ""));
+function parseApplicationInfo(lines) {
+  const monthSignupDates = {};
+  const regionSignupTimes = {};
 
-  if (!title || !periodMatch) return null;
+  const startIndex = lines.findIndex((line) => /^Application Period$/i.test(line));
+  if (startIndex === -1) return { monthSignupDates, regionSignupTimes };
 
-  return {
-    title,
-    date: clean(periodMatch[1]),
-    venue: "",
-    region: "",
-    registration: "",
-    signupGuide: "",
-    source: detailUrl,
-  };
+  const stopRegex = /^(Prize|Side Event|Tournament Rules|Notes|Important Notes|Products|VIEW ALL EVENTS)$/i;
+
+  for (let i = startIndex + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (stopRegex.test(line)) break;
+
+    const monthMatch = line.match(/^For\s+(.+?)\s+Events?:\s*(.+)$/i);
+    if (monthMatch) {
+      monthSignupDates[clean(monthMatch[1])] = clean(monthMatch[2]);
+      continue;
+    }
+
+    const regionMatch = line.match(/^(North America|Europe|Oceania|Latin America|Middle East|Asia|Online):\s*(.+)$/i);
+    if (regionMatch) {
+      regionSignupTimes[standardRegion(regionMatch[1])] = clean(regionMatch[2]);
+    }
+  }
+
+  return { monthSignupDates, regionSignupTimes };
+}
+
+function getFirstMonthFromDate(dateText) {
+  const match = String(dateText || "").match(
+    /\b(January|February|March|April|May|June|July|August|September|October|November|December)\b/i
+  );
+  if (!match) return "";
+  return match[1].charAt(0).toUpperCase() + match[1].slice(1).toLowerCase();
+}
+
+function getSignupGuide(event, applicationInfo) {
+  const month = getFirstMonthFromDate(event.date);
+  const signupDate = applicationInfo.monthSignupDates[month] || "";
+  const signupTime = applicationInfo.regionSignupTimes[event.region] || "";
+
+  if (signupDate && signupTime) return `${signupDate} at ${signupTime}`;
+  if (signupDate) return signupDate;
+  if (signupTime) return signupTime;
+  return "";
 }
 
 function parseDetailedSchedule(html, pageTitle, detailUrl) {
@@ -307,7 +276,6 @@ function parseDetailedSchedule(html, pageTitle, detailUrl) {
       };
 
       event.signupGuide = getSignupGuide(event, applicationInfo);
-
       events.push(event);
       continue;
     }
@@ -329,103 +297,101 @@ function parseDetailedSchedule(html, pageTitle, detailUrl) {
   return events;
 }
 
-const MONTHS = {
-  january: 0,
-  february: 1,
-  march: 2,
-  april: 3,
-  may: 4,
-  june: 5,
-  july: 6,
-  august: 7,
-  september: 8,
-  october: 9,
-  november: 10,
-  december: 11,
-};
-
-function parseEventStartDate(dateText) {
-  const text = clean(String(dateText || "").replace(/\u200b/g, ""));
-
-  const yearMatch = text.match(/\b(20\d{2})\b/);
-  const monthMatch = text.match(
-    /\b(January|February|March|April|May|June|July|August|September|October|November|December)\b/i
-  );
-
-  if (!yearMatch || !monthMatch) return null;
-
-  const year = Number(yearMatch[1]);
-  const monthName = monthMatch[1].toLowerCase();
-  const month = MONTHS[monthName];
-
-  const afterMonth = text.slice(monthMatch.index + monthMatch[0].length);
-  const dayMatch = afterMonth.match(/\s+(\d{1,2})/);
-
-  // If the official site says something like "August - September 2026",
-  // treat it as the 1st of the first month for sorting/filtering.
-  const day = dayMatch ? Number(dayMatch[1]) : 1;
-
-  return new Date(year, month, day);
-}
-
-function isFutureOrUpcomingEvent(dateText) {
-  const eventDate = parseEventStartDate(dateText);
-
-  if (!eventDate) {
-    return true; // Keep TBA/unknown dates instead of accidentally hiding them.
-  }
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  return eventDate >= today;
-}
-
 function normalizeEventFields(event) {
   let date = clean(event.date);
   let venue = clean(event.venue);
   let registration = clean(event.registration);
 
-  // Fix cases where the site gets read as:
-  // Date: June 27, 2026 Venue: ... Link: Registration ...
   const venueFromDate = date.match(/\s+Venue:\s*(.*?)(?:\s+Link:\s*|$)/i);
-  if (!venue && venueFromDate) {
-    venue = clean(venueFromDate[1]);
-  }
+  if (!venue && venueFromDate) venue = clean(venueFromDate[1]);
 
   const linkFromDate = date.match(/\s+Link:\s*(.*)$/i);
-  if (!registration && linkFromDate) {
-    registration = clean(linkFromDate[1]);
-  }
+  if (!registration && linkFromDate) registration = clean(linkFromDate[1]);
 
   date = clean(date.replace(/\s+Venue:.*$/i, "").replace(/\s+Link:.*$/i, ""));
 
-  // Fix cases where venue contains the registration link.
   const linkFromVenue = venue.match(/\s+Link:\s*(.*)$/i);
   if (linkFromVenue) {
     if (!registration) registration = clean(linkFromVenue[1]);
     venue = clean(venue.replace(/\s+Link:.*$/i, ""));
   }
 
+  return { ...event, date, venue, registration };
+}
+
+function parseDateRange(dateText, venue) {
+  const text = clean(dateText);
+  const yearMatch = text.match(/\b(20\d{2})\b/);
+  const monthMatches = [...text.matchAll(/\b(January|February|March|April|May|June|July|August|September|October|November|December)\b/gi)];
+
+  if (!yearMatch || monthMatches.length === 0) return null;
+
+  const year = Number(yearMatch[1]);
+  const startMonthName = monthMatches[0][1].toLowerCase();
+  const startMonth = MONTHS[startMonthName];
+
+  const afterStartMonth = text.slice(monthMatches[0].index + monthMatches[0][0].length);
+  const startDayMatch = afterStartMonth.match(/\s+(\d{1,2})/);
+
+  if (!startDayMatch) return null;
+
+  const startDay = Number(startDayMatch[1]);
+
+  let endMonth = startMonth;
+  let endDay = startDay;
+
+  if (monthMatches.length >= 2) {
+    endMonth = MONTHS[monthMatches[1][1].toLowerCase()];
+    const afterEndMonth = text.slice(monthMatches[1].index + monthMatches[1][0].length);
+    const endDayMatch = afterEndMonth.match(/\s+(\d{1,2})/);
+    if (endDayMatch) endDay = Number(endDayMatch[1]);
+  } else {
+    const rangeMatch = text.match(/\b[A-Za-z]+\s+(\d{1,2})\s*[-–]\s*(\d{1,2})\s*,?\s*20\d{2}/);
+    if (rangeMatch) endDay = Number(rangeMatch[2]);
+  }
+
+  const zone = guessTimeZoneFromVenue(venue);
+
   return {
-    ...event,
-    date,
-    venue,
-    registration,
+    start: DateTime.fromObject(
+      { year, month: startMonth, day: startDay, hour: 10, minute: 0 },
+      { zone }
+    ),
+    end: DateTime.fromObject(
+      { year, month: endMonth, day: endDay, hour: 20, minute: 0 },
+      { zone }
+    ),
   };
 }
 
+function guessTimeZoneFromVenue(venue) {
+  const v = String(venue || "").toUpperCase();
+
+  if (/\b(CA|WA|OR|NV|BC)\b/.test(v)) return "America/Los_Angeles";
+  if (/\bAB\b/.test(v)) return "America/Edmonton";
+  if (/\bAZ\b/.test(v)) return "America/Phoenix";
+  if (/\bCO|UT|NM|WY|MT\b/.test(v)) return "America/Denver";
+  if (/\bTX|OK|IL|IN|WI|MN|MO|LA|AR|IA|KS|NE|TN|MS|AL\b/.test(v)) return "America/Chicago";
+  if (/\bFL|VA|ON|QC|NY|NC|SC|GA|PA|OH|MI|MA|MD|NJ\b/.test(v)) return "America/New_York";
+
+  return "America/Los_Angeles";
+}
+
+function isFutureOrUpcomingEvent(event) {
+  const range = parseDateRange(event.date, event.venue);
+  if (!range) return false;
+
+  const today = DateTime.now().startOf("day");
+  return range.end >= today;
+}
+
 function compareEventsChronologically(a, b) {
-  const dateA = parseEventStartDate(a.date);
-  const dateB = parseEventStartDate(b.date);
+  const rangeA = parseDateRange(a.date, a.venue);
+  const rangeB = parseDateRange(b.date, b.venue);
 
-  if (dateA && dateB) {
-    const diff = dateA.getTime() - dateB.getTime();
-    if (diff !== 0) return diff;
-  }
-
-  if (dateA && !dateB) return -1;
-  if (!dateA && dateB) return 1;
+  if (rangeA && rangeB) return rangeA.start.toMillis() - rangeB.start.toMillis();
+  if (rangeA && !rangeB) return -1;
+  if (!rangeA && rangeB) return 1;
 
   return `${a.title} ${a.venue}`.localeCompare(`${b.title} ${b.venue}`);
 }
@@ -442,174 +408,125 @@ async function scrapeEvents() {
     try {
       const detailHtml = await fetchText(link.url);
       const pageTitle = parseTitleFromDetail(detailHtml, link.text, link.url);
-
       const detailedEvents = parseDetailedSchedule(detailHtml, pageTitle, link.url);
-
-      if (detailedEvents.length) {
-        allEvents.push(...detailedEvents);
-      } else {
-        const fallback = parseCardFallback(link.text, link.url);
-        if (fallback) allEvents.push(fallback);
-      }
+      allEvents.push(...detailedEvents);
     } catch (error) {
       console.log(`Could not parse ${link.url}: ${error.message}`);
     }
   }
 
   const filteredEvents = allEvents
-  .map(normalizeEventFields)
-  .filter((event) => {
-    return event.region && isAllowedRegion(event.region) && isFutureOrUpcomingEvent(event.date);
-  })
-  .sort(compareEventsChronologically);
+    .map(normalizeEventFields)
+    .filter((event) => event.region && isAllowedRegion(event.region))
+    .filter((event) => event.venue && isFutureOrUpcomingEvent(event))
+    .sort(compareEventsChronologically);
 
   const byId = new Map();
   for (const event of filteredEvents) {
-    if (!event.title || !event.date) continue;
     byId.set(eventId(event), event);
   }
 
   return [...byId.values()];
 }
 
-function discordPayload(event) {
-  const fields = [
+async function getExistingDiscordEvents() {
+  const response = await fetch(
+    `https://discord.com/api/v10/guilds/${DISCORD_GUILD_ID}/scheduled-events`,
     {
-      name: "Date",
-      value: event.date || "TBA",
-      inline: true,
-    },
-    {
-      name: "Region",
-      value: event.region || "TBA",
-      inline: true,
-    },
-  ];
+      headers: {
+        Authorization: `Bot ${DISCORD_BOT_TOKEN}`,
+      },
+    }
+  );
 
-  if (event.signupGuide) {
-    fields.push({
-      name: "Sign-up guide",
-      value: `${event.signupGuide}\nExact time may vary by organizer.`,
-      inline: false,
-    });
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`Could not fetch Discord events: ${response.status} ${response.statusText} ${body}`);
   }
 
-  if (event.venue) {
-    fields.push({
-      name: "Venue",
-      value: event.venue.slice(0, 1024),
-      inline: false,
-    });
-  }
+  return response.json();
+}
 
-  if (event.registration) {
-    const registrationUrl = getFirstUrl(event.registration);
-    fields.push({
-      name: "Registration",
-      value: registrationUrl ? `[Registration link](${registrationUrl})` : event.registration.slice(0, 1024),
-      inline: false,
-    });
-  }
+function buildDiscordEventPayload(event) {
+  const range = parseDateRange(event.date, event.venue);
+  if (!range) throw new Error(`Could not parse event date: ${event.date}`);
+
+  const description = [
+    event.date ? `Date: ${event.date}` : "",
+    event.signupGuide ? `Sign-up guide: ${event.signupGuide}` : "",
+    event.registration ? `Registration: ${event.registration}` : "",
+    event.source ? `Source: ${event.source}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   return {
-    username: "ONE PIECE Events",
-    embeds: [
-      {
-        title: `🏴‍☠️ ${event.title}`,
-        url: event.source,
-        description: "New North America official ONE PIECE CARD GAME event found.",
-        fields,
-        footer: {
-          text: "Source: Official ONE PIECE CARD GAME website",
-        },
-      },
-    ],
+    name: event.title.slice(0, 100),
+    privacy_level: 2,
+    scheduled_start_time: range.start.toUTC().toISO(),
+    scheduled_end_time: range.end.toUTC().toISO(),
+    description: description.slice(0, 1000),
+    entity_type: 3,
+    channel_id: null,
+    entity_metadata: {
+      location: event.venue.slice(0, 100),
+    },
   };
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+async function createDiscordScheduledEvent(event) {
+  const payload = buildDiscordEventPayload(event);
 
-async function postToDiscord(event) {
-  if (!DISCORD_WEBHOOK_URL) {
-    console.log("[DRY RUN] No DISCORD_WEBHOOK_URL set. Would post:");
-    console.log(JSON.stringify(discordPayload(event), null, 2));
-    return;
-  }
-
-  for (let attempt = 1; attempt <= 5; attempt++) {
-    const response = await fetch(DISCORD_WEBHOOK_URL, {
+  const response = await fetch(
+    `https://discord.com/api/v10/guilds/${DISCORD_GUILD_ID}/scheduled-events`,
+    {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(discordPayload(event)),
-    });
-
-    if (response.ok) {
-      // Small delay so Discord does not get spammed too fast.
-      await sleep(2000);
-      return;
+      headers: {
+        Authorization: `Bot ${DISCORD_BOT_TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(payload),
     }
+  );
 
+  if (!response.ok) {
     const body = await response.text().catch(() => "");
-
-    if (response.status === 429) {
-      let retryAfterMs = 1800;
-
-      try {
-        const data = JSON.parse(body);
-        if (data.retry_after) {
-          retryAfterMs = Math.ceil(Number(data.retry_after) * 1000) + 1000;
-        }
-      } catch {}
-
-      console.log(`Discord rate limited. Waiting ${retryAfterMs}ms, then retrying...`);
-      await sleep(retryAfterMs);
-      continue;
-    }
-
-    throw new Error(`Discord webhook failed: ${response.status} ${response.statusText} ${body}`);
+    throw new Error(`Could not create Discord scheduled event: ${response.status} ${response.statusText} ${body}`);
   }
 
-  throw new Error("Discord webhook failed after too many retry attempts.");
+  return response.json();
 }
 
 async function main() {
+  if (!DISCORD_BOT_TOKEN || !DISCORD_GUILD_ID) {
+    throw new Error("Missing DISCORD_BOT_TOKEN or DISCORD_GUILD_ID.");
+  }
+
   const seenIds = await readSeenIds();
-  const hadExistingState = seenIds.size > 0;
+  const officialEvents = await scrapeEvents();
+  const existingDiscordEvents = await getExistingDiscordEvents();
 
-  const events = await scrapeEvents();
-  console.log(`Found ${events.length} North America official events.`);
+  const existingNames = new Set(
+    existingDiscordEvents.map((event) => clean(event.name).toLowerCase())
+  );
 
-  if (!events.length) {
-    console.log("No North America events found. Not updating seen file.");
-    process.exitCode = 1;
-    return;
+  console.log(`Found ${officialEvents.length} future North America official events.`);
+  console.log(`Found ${existingDiscordEvents.length} existing Discord scheduled events.`);
+
+  const eventsToCreate = officialEvents
+    .filter((event) => !seenIds.has(eventId(event)))
+    .filter((event) => !existingNames.has(clean(event.title).slice(0, 100).toLowerCase()))
+    .slice(0, MAX_EVENTS_PER_RUN);
+
+  console.log(`Creating ${eventsToCreate.length} Discord scheduled events.`);
+
+  for (const event of eventsToCreate) {
+    await createDiscordScheduledEvent(event);
+    seenIds.add(eventId(event));
+    console.log(`Created Discord event: ${event.date} - ${event.title}`);
   }
 
-  const newEvents = events.filter((event) => !seenIds.has(eventId(event)));
-  console.log(`New events: ${newEvents.length}`);
-
-  if (!hadExistingState && !POST_EXISTING) {
-    console.log("First run: saving current North America official events as baseline without posting.");
-    for (const event of events) seenIds.add(eventId(event));
-    await writeSeenIds(seenIds);
-    return;
-  }
-
-  const toPost = newEvents.slice(0, MAX_POSTS_PER_RUN);
-
-  for (const event of toPost) {
-  await postToDiscord(event);
-  seenIds.add(eventId(event));
-  console.log(`Posted: ${event.date} - ${event.title}`);
-}
-
-await writeSeenIds(seenIds);
-
-  if (newEvents.length > toPost.length) {
-    console.log(`Skipped ${newEvents.length - toPost.length} events due to MAX_POSTS_PER_RUN.`);
-  }
+  await writeSeenIds(seenIds);
 }
 
 main().catch((error) => {
