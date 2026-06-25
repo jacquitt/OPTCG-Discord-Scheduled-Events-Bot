@@ -68,7 +68,7 @@ function stripHtmlToLines(html, baseUrl = EVENTS_URL) {
     (_, href, inner) => {
       const label = clean(inner.replace(/<[^>]+>/g, " "));
       const url = absoluteUrl(decodeHtml(href), baseUrl);
-      return label ? `${label} ${url}` : url;
+      return label ? label + " " + url : url;
     }
   );
 
