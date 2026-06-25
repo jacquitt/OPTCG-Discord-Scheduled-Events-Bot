@@ -1,4 +1,3 @@
-```js
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -122,14 +121,14 @@ function isAllowedRegion(region) {
 function eventId(event) {
   return crypto
     .createHash("sha256")
-    .update(`tournament|${event.title}|${event.date}|${event.region}|${event.venue}`)
+    .update("tournament|" + event.title + "|" + event.date + "|" + event.region + "|" + event.venue)
     .digest("hex");
 }
 
 function signupEventId(event) {
   return crypto
     .createHash("sha256")
-    .update(`signup|${event.title}|${event.date}|${event.signupGuide}|${event.registration}`)
+    .update("signup|" + event.title + "|" + event.date + "|" + event.signupGuide + "|" + event.registration)
     .digest("hex");
 }
 
@@ -238,7 +237,7 @@ function getSignupGuide(event, applicationInfo) {
   const signupDate = applicationInfo.monthSignupDates[month] || "";
   const signupTime = applicationInfo.regionSignupTimes[event.region] || "";
 
-  if (signupDate && signupTime) return `${signupDate} at ${signupTime}`;
+  if (signupDate && signupTime) return signupDate + " at " + signupTime;
   if (signupDate) return signupDate;
   if (signupTime) return signupTime;
 
@@ -296,7 +295,7 @@ function parseDetailedSchedule(html, pageTitle, detailUrl) {
       }
 
       const event = {
-        title: currentOrganizer ? `${pageTitle} - ${currentOrganizer}` : pageTitle,
+        title: currentOrganizer ? pageTitle + " - " + currentOrganizer : pageTitle,
         date,
         venue,
         region: currentRegion,
@@ -495,14 +494,14 @@ function compareEventsChronologically(a, b) {
   if (rangeA && !rangeB) return -1;
   if (!rangeA && rangeB) return 1;
 
-  return `${a.title} ${a.venue}`.localeCompare(`${b.title} ${b.venue}`);
+  return (a.title + " " + a.venue).localeCompare(b.title + " " + b.venue);
 }
 
 async function scrapeEvents() {
   const mainHtml = await fetchText(EVENTS_URL);
   const links = parseMainEventLinks(mainHtml);
 
-  console.log(`Found ${links.length} official event pages.`);
+  console.log("Found " + links.length + " official event pages.");
 
   const allEvents = [];
 
@@ -514,7 +513,7 @@ async function scrapeEvents() {
 
       allEvents.push(...detailedEvents);
     } catch (error) {
-      console.log(`Could not parse ${link.url}: ${error.message}`);
+      console.log("Could not parse " + link.url + ": " + error.message);
     }
   }
 
@@ -535,10 +534,10 @@ async function scrapeEvents() {
 
 async function getExistingDiscordEvents() {
   const response = await fetch(
-    `https://discord.com/api/v10/guilds/${DISCORD_GUILD_ID}/scheduled-events`,
+    "https://discord.com/api/v10/guilds/" + DISCORD_GUILD_ID + "/scheduled-events",
     {
       headers: {
-        Authorization: `Bot ${DISCORD_BOT_TOKEN}`,
+        Authorization: "Bot " + DISCORD_BOT_TOKEN,
       },
     }
   );
@@ -547,7 +546,7 @@ async function getExistingDiscordEvents() {
     const body = await response.text().catch(() => "");
 
     throw new Error(
-      `Could not fetch Discord events: ${response.status} ${response.statusText} ${body}`
+      "Could not fetch Discord events: " + response.status + " " + response.statusText + " " + body
     );
   }
 
@@ -559,7 +558,7 @@ function payloadKey(payload) {
   const date = DateTime.fromISO(payload.scheduled_start_time).toUTC().toISODate();
   const location = clean(payload.entity_metadata?.location || "").toLowerCase();
 
-  return `${name}|${date}|${location}`;
+  return name + "|" + date + "|" + location;
 }
 
 function buildExistingDiscordEventKeys(existingDiscordEvents) {
@@ -569,7 +568,7 @@ function buildExistingDiscordEventKeys(existingDiscordEvents) {
       const date = DateTime.fromISO(event.scheduled_start_time).toUTC().toISODate();
       const location = clean(event.entity_metadata?.location || "").toLowerCase();
 
-      return `${name}|${date}|${location}`;
+      return name + "|" + date + "|" + location;
     })
   );
 }
@@ -578,14 +577,14 @@ function buildDiscordTournamentEventPayload(event) {
   const range = parseDateRange(event.date, event.venue);
 
   if (!range) {
-    throw new Error(`Could not parse event date: ${event.date}`);
+    throw new Error("Could not parse event date: " + event.date);
   }
 
   const description = [
-    event.date ? `Date: ${event.date}` : "",
-    event.signupGuide ? `Sign-up guide: ${event.signupGuide}` : "",
-    event.registration ? `Registration: ${event.registration}` : "",
-    event.source ? `Source: ${event.source}` : "",
+    event.date ? "Date: " + event.date : "",
+    event.signupGuide ? "Sign-up guide: " + event.signupGuide : "",
+    event.registration ? "Registration: " + event.registration : "",
+    event.source ? "Source: " + event.source : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -608,24 +607,24 @@ function buildDiscordSignupEventPayload(event) {
   const signupDateTime = parseSignupDateTime(event.signupGuide);
 
   if (!signupDateTime) {
-    throw new Error(`Could not parse sign-up guide: ${event.signupGuide}`);
+    throw new Error("Could not parse sign-up guide: " + event.signupGuide);
   }
 
   const start = signupDateTime;
   const end = signupDateTime.plus({ hours: 1 });
 
   const description = [
-    `Registration opens for: ${event.title}`,
-    event.date ? `Tournament date: ${event.date}` : "",
-    event.venue ? `Tournament venue: ${event.venue}` : "",
-    event.registration ? `Registration: ${event.registration}` : "",
-    event.source ? `Source: ${event.source}` : "",
+    "Registration opens for: " + event.title,
+    event.date ? "Tournament date: " + event.date : "",
+    event.venue ? "Tournament venue: " + event.venue : "",
+    event.registration ? "Registration: " + event.registration : "",
+    event.source ? "Source: " + event.source : "",
   ]
     .filter(Boolean)
     .join("\n");
 
   return {
-    name: `SIGN-UP OPENS: ${event.title}`.slice(0, 100),
+    name: ("SIGN-UP OPENS: " + event.title).slice(0, 100),
     privacy_level: 2,
     scheduled_start_time: start.toUTC().toISO(),
     scheduled_end_time: end.toUTC().toISO(),
@@ -641,11 +640,11 @@ function buildDiscordSignupEventPayload(event) {
 async function createDiscordScheduledEventFromPayload(payload) {
   for (let attempt = 1; attempt <= 5; attempt++) {
     const response = await fetch(
-      `https://discord.com/api/v10/guilds/${DISCORD_GUILD_ID}/scheduled-events`,
+      "https://discord.com/api/v10/guilds/" + DISCORD_GUILD_ID + "/scheduled-events",
       {
         method: "POST",
         headers: {
-          Authorization: `Bot ${DISCORD_BOT_TOKEN}`,
+          Authorization: "Bot " + DISCORD_BOT_TOKEN,
           "content-type": "application/json",
         },
         body: JSON.stringify(payload),
@@ -669,13 +668,18 @@ async function createDiscordScheduledEventFromPayload(payload) {
         }
       } catch {}
 
-      console.log(`Discord rate limited. Waiting ${retryAfterMs}ms, then retrying...`);
+      console.log("Discord rate limited. Waiting " + retryAfterMs + "ms, then retrying...");
       await sleep(retryAfterMs);
       continue;
     }
 
     throw new Error(
-      `Could not create Discord scheduled event: ${response.status} ${response.statusText} ${body}`
+      "Could not create Discord scheduled event: " +
+        response.status +
+        " " +
+        response.statusText +
+        " " +
+        body
     );
   }
 
@@ -692,8 +696,8 @@ async function main() {
   const existingDiscordEvents = await getExistingDiscordEvents();
   const existingDiscordEventKeys = buildExistingDiscordEventKeys(existingDiscordEvents);
 
-  console.log(`Found ${officialEvents.length} future North America official events.`);
-  console.log(`Found ${existingDiscordEvents.length} existing Discord scheduled events.`);
+  console.log("Found " + officialEvents.length + " future North America official events.");
+  console.log("Found " + existingDiscordEvents.length + " existing Discord scheduled events.");
 
   const jobs = [];
 
@@ -743,16 +747,16 @@ async function main() {
 
   const jobsToCreate = jobs.slice(0, MAX_EVENTS_PER_RUN);
 
-  console.log(`Creating ${jobsToCreate.length} Discord scheduled events.`);
+  console.log("Creating " + jobsToCreate.length + " Discord scheduled events.");
 
   for (const job of jobsToCreate) {
     await createDiscordScheduledEventFromPayload(job.payload);
     seenIds.add(job.id);
 
     if (job.type === "signup") {
-      console.log(`Created sign-up event: ${job.event.signupGuide} - ${job.event.title}`);
+      console.log("Created sign-up event: " + job.event.signupGuide + " - " + job.event.title);
     } else {
-      console.log(`Created tournament event: ${job.event.date} - ${job.event.title}`);
+      console.log("Created tournament event: " + job.event.date + " - " + job.event.title);
     }
   }
 
@@ -763,4 +767,3 @@ main().catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });
-```
